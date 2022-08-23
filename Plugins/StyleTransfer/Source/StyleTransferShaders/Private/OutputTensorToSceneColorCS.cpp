@@ -10,6 +10,4 @@ void FOutputTensorToSceneColorCS::ModifyCompilationEnvironment(const FGlobalShad
 	FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 }
 
-IMPLEMENT_GLOBAL_SHADER(FOutputTensorToSceneColorCS,
-                        "/Plugins/StyleTransfer/Shaders/Private/OutputTensorToSceneColor.usf",
-                        "OutputTensorToSceneColorCS", SF_Compute); // Path defined in StyleTransferModule.cpp
+IMPLEMENT_GLOBAL_SHADER(FOutputTensorToSceneColorCS, "/Plugins/StyleTransfer/Shaders/Private/OutputTensorToSceneColor.usf", "OutputTensorToSceneColorCS", SF_Compute); // Path defined in StyleTransferModule.cpp

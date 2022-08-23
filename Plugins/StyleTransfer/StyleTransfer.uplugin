@@ -17,7 +17,7 @@
     {
       "Name": "StyleTransfer",
       "Type": "Runtime",
-      "LoadingPhase": "PostConfigInit",
+      "LoadingPhase": "Default",
       "WhitelistPlatforms": [
         "Win64"
       ]

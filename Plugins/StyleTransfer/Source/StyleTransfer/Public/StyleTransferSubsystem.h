@@ -20,6 +20,7 @@ class STYLETRANSFER_API UStyleTransferSubsystem : public UGameInstanceSubsystem
 public:
 	// - UGameInstanceSubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void Deinitialize() override;
 	// --
 
 	void StartStylizingViewport(FViewportClient* ViewportClient);
@@ -34,4 +35,6 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UNeuralNetwork> StylePredictionNetwork;
+
+	int32 StylePredictionInferenceContext = -1;
 };

@@ -10,10 +10,10 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	StyleTransferNetwork = NewObject<UNeuralNetwork>();
+	StyleTransferNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StyleTransfer.NN_StyleTransfer"));
+	StylePredictionNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StylePredictor.NN_StylePredictor"));
 
-	FString ONNXModelFilePath = TEXT("SOME_PARENT_FOLDER/SOME_ONNX_FILE_NAME.onnx");
-	if (StyleTransferNetwork->Load(ONNXModelFilePath))
+	if (StyleTransferNetwork->IsLoaded())
 	{
 		if (StyleTransferNetwork->IsGPUSupported())
 		{
@@ -26,13 +26,11 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StyleTransferNetwork could not loaded from %s."), *ONNXModelFilePath);
+		UE_LOG(LogTemp, Warning, TEXT("StyleTransferNetwork could not be loaded"));
 	}
 
-	StylePredictionNetwork = NewObject<UNeuralNetwork>();
 
-	ONNXModelFilePath = TEXT("SOME_PARENT_FOLDER/SOME_ONNX_FILE_NAME.onnx");
-	if (StylePredictionNetwork->Load(ONNXModelFilePath))
+	if (StylePredictionNetwork->IsLoaded())
 	{
 		if (StylePredictionNetwork->IsGPUSupported())
 		{
@@ -45,16 +43,38 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StylePredictionNetwork could not loaded from %s."), *ONNXModelFilePath);
+		UE_LOG(LogTemp, Warning, TEXT("StylePredictionNetwork could not be loaded."));
 	}
+}
+
+void UStyleTransferSubsystem::Deinitialize()
+{
+	StyleTransferSceneViewExtension.Reset();
+	StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
+
+	Super::Deinitialize();
 }
 
 void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportClient)
 {
 	StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork);
+	StylePredictionInferenceContext = StylePredictionNetwork->CreateInferenceContext();
 }
 
 void UStyleTransferSubsystem::UpdateStyle(FNeuralTensor StyleImage)
 {
+	StylePredictionNetwork->SetInputFromArrayCopy(StyleImage.GetArrayCopy<float>());
 
+	ENQUEUE_RENDER_COMMAND(StylePrediction)([this](FRHICommandListImmediate& RHICommandList)
+	{
+		FRDGBuilder GraphBuilder(RHICommandList);
+
+		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
+
+		// @todo: copy output of style prediction network to input of style transfer network
+
+		GraphBuilder.Execute();
+	});
+
+	FlushRenderingCommands();
 }
