@@ -1,0 +1,27 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D<float4> InputTexture;
+RWBuffer<float> OutputUAV;
+
+[numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
+void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
+{
+	uint2 TexelCoordinate = DispatchThreadID.xy;
+
+	const uint GlobalIndex = TexelCoordinate.x * TexelCoordinate.y * 3;
+
+	uint TensorVolume;
+	OutputUAV.GetDimensions(TensorVolume);
+
+	if (GlobalIndex >= TensorVolume)
+	{
+		return;
+	}
+
+	float4 TextureValue = InputTexture[DispatchThreadID.xy];
+	OutputUAV[GlobalIndex + 0] = TextureValue.r;
+	OutputUAV[GlobalIndex + 1] = TextureValue.g;
+	OutputUAV[GlobalIndex + 2] = TextureValue.b;
+}
