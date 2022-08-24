@@ -6,26 +6,27 @@
 RWTexture2D<float4> OutputTexture;
 Buffer<float> InputTensor;
 
-[numthreads(1, 1, 1)]
+[numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
 void OutputTensorToSceneColorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
 {
-	const uint GlobalIndex = DispatchThreadID.x;
 
 	uint TensorVolume;
 	InputTensor.GetDimensions(TensorVolume);
+
+	uint2 TextureSize = 0;
+	OutputTexture.GetDimensions(TextureSize.x, TextureSize.y);
+
+	// note that the input tensor has shape (1, Y, X, C)
+	// which is why we need to flip the indexing
+	const uint PixelIndex = DispatchThreadID.x * TextureSize.y + DispatchThreadID.x;
+	const uint GlobalIndex = PixelIndex * 3;
 
 	if (GlobalIndex >= TensorVolume)
 	{
 		return;
 	}
-	uint2 TextureSize = 0;
-	OutputTexture.GetDimensions(TextureSize.x, TextureSize.y);
-	const uint PixelIndex = GlobalIndex / 3;
-	const uint ChannelIndex = GlobalIndex % 3;
-	const uint MajorIndex = PixelIndex / TextureSize.x;
-	const uint MinorIndex = PixelIndex % TextureSize.x;
-	const uint2 TextureCoords = uint2(MajorIndex, MinorIndex);
 
+	const uint2 TextureCoords = uint2(DispatchThreadID.y, DispatchThreadID.x);
 	OutputTexture[TextureCoords] = float4(
 		InputTensor[GlobalIndex + 0],
 		InputTensor[GlobalIndex + 1],

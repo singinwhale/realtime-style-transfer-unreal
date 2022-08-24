@@ -4,6 +4,7 @@
 #include "StyleTransferSubsystem.h"
 
 #include "NeuralNetwork.h"
+#include "RenderGraphUtils.h"
 #include "StyleTransferSceneViewExtension.h"
 
 void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -15,14 +16,16 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (StyleTransferNetwork->IsLoaded())
 	{
-		if (StyleTransferNetwork->IsGPUSupported())
+		for (int32 i = 0; i < StyleTransferNetwork->GetInputTensorNumber(); ++i)
 		{
-			StyleTransferNetwork->SetDeviceType(ENeuralDeviceType::GPU);
+			const FNeuralTensor& InputTensor = StyleTransferNetwork->GetInputTensor(i);
+			if (InputTensor.GetName() != "style_params")
+				continue;
+
+			StyleTransferStyleParamsInputIndex = i;
+			break;
 		}
-		else
-		{
-			StyleTransferNetwork->SetDeviceType(ENeuralDeviceType::CPU);
-		}
+		StyleTransferNetwork->SetDeviceType(ENeuralDeviceType::GPU, ENeuralDeviceType::GPU, ENeuralDeviceType::GPU);
 	}
 	else
 	{
@@ -32,14 +35,7 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (StylePredictionNetwork->IsLoaded())
 	{
-		if (StylePredictionNetwork->IsGPUSupported())
-		{
-			StylePredictionNetwork->SetDeviceType(ENeuralDeviceType::GPU);
-		}
-		else
-		{
-			StylePredictionNetwork->SetDeviceType(ENeuralDeviceType::CPU);
-		}
+		StyleTransferNetwork->SetDeviceType(ENeuralDeviceType::GPU, ENeuralDeviceType::GPU, ENeuralDeviceType::GPU);
 	}
 	else
 	{
@@ -50,19 +46,32 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UStyleTransferSubsystem::Deinitialize()
 {
 	StyleTransferSceneViewExtension.Reset();
-	StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
+	if(StylePredictionInferenceContext != INDEX_NONE)
+	{
+		StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
+	}
+	if(StyleTransferInferenceContext != INDEX_NONE)
+	{
+		StyleTransferNetwork->DestroyInferenceContext(StyleTransferInferenceContext);
+	}
 
 	Super::Deinitialize();
 }
 
 void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportClient)
 {
-	StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork);
 	StylePredictionInferenceContext = StylePredictionNetwork->CreateInferenceContext();
+	checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StylePredictionNetwork"));
+	StyleTransferInferenceContext = StyleTransferNetwork->CreateInferenceContext();
+	checkf(StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
+
+	StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext);
 }
 
-void UStyleTransferSubsystem::UpdateStyle(FNeuralTensor StyleImage)
+void UStyleTransferSubsystem::UpdateStyle(const FNeuralTensor& StyleImage)
 {
+	checkf(StyleTransferSceneViewExtension.IsValid(), TEXT("Can not update style while not stylizing"));
+
 	StylePredictionNetwork->SetInputFromArrayCopy(StyleImage.GetArrayCopy<float>());
 
 	ENQUEUE_RENDER_COMMAND(StylePrediction)([this](FRHICommandListImmediate& RHICommandList)
@@ -71,7 +80,17 @@ void UStyleTransferSubsystem::UpdateStyle(FNeuralTensor StyleImage)
 
 		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
 
-		// @todo: copy output of style prediction network to input of style transfer network
+		const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
+		const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+
+		FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
+		FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
+		const uint64 NumBytes = OutputStyleParams.NumInBytes();
+		check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
+		check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
+		check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
+
+		AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
 
 		GraphBuilder.Execute();
 	});

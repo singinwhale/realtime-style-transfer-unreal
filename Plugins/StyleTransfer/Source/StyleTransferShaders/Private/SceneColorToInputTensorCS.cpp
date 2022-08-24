@@ -3,15 +3,16 @@
 #include "SceneColorToInputTensorCS.h"
 #include "Utils.h"
 
+const FIntVector FSceneColorToInputTensorCS::ThreadGroupSize{8, 8, 1};
 
 
 void FSceneColorToInputTensorCS::ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 {
 	FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 
-	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_X"), THREADGROUP_SIZE_X);
-	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_Y"), THREADGROUP_SIZE_Y);
-	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_Z"), 1);
+	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_X"), ThreadGroupSize.X);
+	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_Y"), ThreadGroupSize.Y);
+	OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE_Z"), ThreadGroupSize.Z);
 }
 
 IMPLEMENT_GLOBAL_SHADER(FSceneColorToInputTensorCS,

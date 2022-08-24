@@ -16,8 +16,9 @@ class STYLETRANSFERSHADERS_API FSceneColorToInputTensorCS : public FGlobalShader
 	DECLARE_GLOBAL_SHADER(FSceneColorToInputTensorCS);
 	SHADER_USE_PARAMETER_STRUCT(FSceneColorToInputTensorCS, FGlobalShader)
 
-	static const uint32 THREADGROUP_SIZE_X = 8;
-	static const uint32 THREADGROUP_SIZE_Y = 8;
+
+	static const FIntVector ThreadGroupSize;
+
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		// Input variables
@@ -26,6 +27,9 @@ class STYLETRANSFERSHADERS_API FSceneColorToInputTensorCS : public FGlobalShader
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutputUAV)
 		// Optional SRV/UAV variables
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, InputTextureSampler)
+		SHADER_PARAMETER(FIntPoint, OutputDimensions)
+		SHADER_PARAMETER(FVector2f, HalfPixelUV)
 	END_SHADER_PARAMETER_STRUCT()
 
 	// - FShader

@@ -25,7 +25,7 @@ public:
 
 	void StartStylizingViewport(FViewportClient* ViewportClient);
 
-	void UpdateStyle(FNeuralTensor StyleImage);
+	void UpdateStyle(const FNeuralTensor& StyleImage);
 
 private:
 	FStyleTransferSceneViewExtension::Ptr StyleTransferSceneViewExtension;
@@ -36,5 +36,8 @@ private:
 	UPROPERTY()
 	TObjectPtr<UNeuralNetwork> StylePredictionNetwork;
 
-	int32 StylePredictionInferenceContext = -1;
+	int32 StylePredictionInferenceContext = INDEX_NONE;
+	int32 StyleTransferInferenceContext = INDEX_NONE;
+
+	int32 StyleTransferStyleParamsInputIndex = INDEX_NONE;
 };

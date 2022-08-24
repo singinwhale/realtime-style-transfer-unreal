@@ -3,24 +3,28 @@
 #include "/Engine/Public/Platform.ush"
 
 Texture2D<float4> InputTexture;
+SamplerState InputTextureSampler;
 RWBuffer<float> OutputUAV;
+uint2 OutputDimensions; // X = InputTensor.GetSize(1), Y = InputTensor.GetSize(2) -> this does not correspond to input texture XY
+float2 HalfPixelUV;
 
 [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
 void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
 {
-	uint2 TexelCoordinate = DispatchThreadID.xy;
-
-	const uint GlobalIndex = TexelCoordinate.x * TexelCoordinate.y * 3;
-
-	uint TensorVolume;
-	OutputUAV.GetDimensions(TensorVolume);
-
-	if (GlobalIndex >= TensorVolume)
+	const uint2 OutputUAVTexelCoordinate = DispatchThreadID.xy;
+	if(any(OutputUAVTexelCoordinate > OutputDimensions))
 	{
 		return;
 	}
 
-	float4 TextureValue = InputTexture[DispatchThreadID.xy];
+	const uint GlobalIndex = (OutputUAVTexelCoordinate.x * OutputDimensions.x + OutputUAVTexelCoordinate.y) * 3;
+
+	// note that the input tensor has shape (1, Y, X, C)
+	// which is why we need to flip the indexing
+	const float2 UV = OutputUAVTexelCoordinate.yx / OutputDimensions.yx + HalfPixelUV;
+
+	const float4 TextureValue = InputTexture.SampleLevel(InputTextureSampler, UV, 0);
+
 	OutputUAV[GlobalIndex + 0] = TextureValue.r;
 	OutputUAV[GlobalIndex + 1] = TextureValue.g;
 	OutputUAV[GlobalIndex + 2] = TextureValue.b;
