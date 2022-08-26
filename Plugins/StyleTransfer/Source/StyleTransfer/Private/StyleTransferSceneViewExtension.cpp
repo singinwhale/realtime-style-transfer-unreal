@@ -18,7 +18,9 @@
 #include "Containers/DynamicRHIResourceArray.h"
 #include "PostProcess/PostProcessMaterial.h"
 #include "OutputTensorToSceneColorCS.h"
+#include "PixelShaderUtils.h"
 #include "SceneColorToInputTensorCS.h"
+#include "StyleTransferModule.h"
 
 template <class OutType, class InType>
 OutType CastNarrowingSafe(InType InValue)
@@ -35,8 +37,9 @@ OutType CastNarrowingSafe(InType InValue)
 }
 
 
-FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, int32 InInferenceContext)
+FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, TSharedRef<int32> InInferenceContext)
 	: FSceneViewExtensionBase(AutoRegister)
+	  , StyleTransferNetworkWeakPtr(InStyleTransferNetwork)
 	  , StyleTransferNetwork(InStyleTransferNetwork)
 	  , LinkedViewportClient(AssociatedViewportClient)
 	  , InferenceContext(InInferenceContext)
@@ -48,9 +51,54 @@ void FStyleTransferSceneViewExtension::SetupViewFamily(FSceneViewFamily& InViewF
 {
 }
 
-void FStyleTransferSceneViewExtension::SubscribeToPostProcessingPass(EPostProcessingPass PassId,
-                                                                     FAfterPassCallbackDelegateArray&
-                                                                     InOutPassCallbacks, bool bIsPassEnabled)
+bool FStyleTransferSceneViewExtension::IsActiveThisFrame_Internal(const FSceneViewExtensionContext& Context) const
+{
+	check(IsInGameThread());
+	return bIsEnabled && *InferenceContext != -1 && StyleTransferNetworkWeakPtr.IsValid();
+}
+
+void FStyleTransferSceneViewExtension::AddRescalingTextureCopy(FRDGBuilder& GraphBuilder, FRDGTexture& RDGSourceTexture, FScreenPassRenderTarget& DestinationRenderTarget)
+{
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+
+	TShaderMapRef<FScreenPassVS> VertexShader(ShaderMap);
+
+	TShaderMapRef<FCopyRectPS> PixelShader(ShaderMap);
+
+	FCopyRectPS::FParameters* PixelShaderParameters = GraphBuilder.AllocParameters<FCopyRectPS::FParameters>();
+	PixelShaderParameters->InputTexture = &RDGSourceTexture;
+	PixelShaderParameters->InputSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+	PixelShaderParameters->RenderTargets[0] = DestinationRenderTarget.GetRenderTargetBinding();
+
+	ClearUnusedGraphResources(PixelShader, PixelShaderParameters);
+
+	FRHIBlendState* BlendState = FScreenPassPipelineState::FDefaultBlendState::GetRHI();
+	FRHIDepthStencilState* DepthStencilState = FScreenPassPipelineState::FDefaultDepthStencilState::GetRHI();
+
+	const FScreenPassPipelineState PipelineState(VertexShader, PixelShader, BlendState, DepthStencilState);
+
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("RescalingTextureCopy"),
+		PixelShaderParameters,
+		ERDGPassFlags::Raster,
+		[PipelineState, Extent = DestinationRenderTarget.Texture->Desc.Extent, PixelShader, PixelShaderParameters](FRHICommandList& RHICmdList)
+		{
+			PipelineState.Validate();
+			RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, Extent.X, Extent.Y, 1.0f);
+			SetScreenPassPipelineState(RHICmdList, PipelineState);
+			SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PixelShaderParameters);
+			DrawRectangle(
+				RHICmdList,
+				0, 0, Extent.X, Extent.Y,
+				0, 0, Extent.X, Extent.Y,
+				Extent,
+				Extent,
+				PipelineState.VertexShader,
+				EDRF_UseTriangleOptimization);
+		});
+}
+
+void FStyleTransferSceneViewExtension::SubscribeToPostProcessingPass(EPostProcessingPass PassId, FAfterPassCallbackDelegateArray& InOutPassCallbacks, bool bIsPassEnabled)
 {
 	if (PassId == EPostProcessingPass::Tonemap)
 	{
@@ -60,8 +108,88 @@ void FStyleTransferSceneViewExtension::SubscribeToPostProcessingPass(EPostProces
 	}
 }
 
-FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap_RenderThread(
-	FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& InOutInputs)
+FRDGTexture* FStyleTransferSceneViewExtension::TensorToTexture(FRDGBuilder& GraphBuilder, const FRDGTextureDesc& BaseDestinationDesc, const FNeuralTensor& SourceTensor)
+{
+	FIntVector SourceTensorDimensions = {
+		CastNarrowingSafe<int32>(SourceTensor.GetSize(1)),
+		CastNarrowingSafe<int32>(SourceTensor.GetSize(2)),
+		CastNarrowingSafe<int32>(SourceTensor.GetSize(3)),
+	};
+
+	// Reusing the same output description for our back buffer as SceneColor
+	FRDGTextureDesc DestinationDesc = BaseDestinationDesc;
+	// this is flipped because the Output tensor has the vertical dimension first
+	// while unreal has the horizontal dimension first
+	DestinationDesc.Extent = {SourceTensorDimensions[1], SourceTensorDimensions[0]};
+	DestinationDesc.Flags |= TexCreate_RenderTargetable | TexCreate_UAV;
+	FLinearColor ClearColor(0., 0., 0., 0.);
+	DestinationDesc.ClearValue = FClearValueBinding(ClearColor);
+	FRDGTexture* OutputTexture = GraphBuilder.CreateTexture(
+		DestinationDesc, TEXT("OutputTexture"));
+
+	FRDGBufferRef SourceTensorBuffer = GraphBuilder.RegisterExternalBuffer(SourceTensor.GetPooledBuffer());
+
+	auto OutputTensorToSceneColorParameters = GraphBuilder.AllocParameters<FOutputTensorToSceneColorCS::FParameters>();
+	OutputTensorToSceneColorParameters->InputTensor = GraphBuilder.CreateSRV(SourceTensorBuffer, EPixelFormat::PF_R32_FLOAT);
+	OutputTensorToSceneColorParameters->OutputTexture = GraphBuilder.CreateUAV(OutputTexture);
+	OutputTensorToSceneColorParameters->TensorVolume = SourceTensor.Num();
+	OutputTensorToSceneColorParameters->TextureSize = DestinationDesc.Extent;
+	FIntVector OutputTensorToSceneColorGroupCount = FComputeShaderUtils::GetGroupCount(
+		{SourceTensorDimensions.X, SourceTensorDimensions.Y, 1},
+		FOutputTensorToSceneColorCS::ThreadGroupSize
+	);
+
+	TShaderMapRef<FOutputTensorToSceneColorCS> OutputTensorToSceneColorCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("TensorToTexture"),
+		OutputTensorToSceneColorParameters,
+		ERDGPassFlags::Compute,
+		[OutputTensorToSceneColorCS, OutputTensorToSceneColorParameters, OutputTensorToSceneColorGroupCount](FRHICommandList& RHICommandList)
+		{
+			FComputeShaderUtils::Dispatch(RHICommandList, OutputTensorToSceneColorCS,
+			                              *OutputTensorToSceneColorParameters, OutputTensorToSceneColorGroupCount);
+		}
+	);
+
+	return OutputTexture;
+}
+
+void FStyleTransferSceneViewExtension::TextureToTensor(FRDGBuilder& GraphBuilder, const FScreenPassTexture& SourceTexture, const FNeuralTensor& DestinationTensor)
+{
+	const FIntVector InputTensorDimensions = {
+		CastNarrowingSafe<int32>(DestinationTensor.GetSize(1)),
+		CastNarrowingSafe<int32>(DestinationTensor.GetSize(2)),
+		CastNarrowingSafe<int32>(DestinationTensor.GetSize(3)),
+	};
+	const FIntPoint SceneColorRenderTargetDimensions = SourceTexture.Texture->Desc.Extent;
+
+	FRDGBufferRef StyleTransferContentInputBuffer = GraphBuilder.RegisterExternalBuffer(DestinationTensor.GetPooledBuffer());
+	auto SceneColorToInputTensorParameters = GraphBuilder.AllocParameters<FSceneColorToInputTensorCS::FParameters>();
+	SceneColorToInputTensorParameters->TensorVolume = CastNarrowingSafe<uint32>(DestinationTensor.Num());
+	SceneColorToInputTensorParameters->InputTexture = SourceTexture.Texture;
+	SceneColorToInputTensorParameters->InputTextureSampler = TStaticSamplerState<SF_Bilinear>::GetRHI();
+	SceneColorToInputTensorParameters->OutputUAV = GraphBuilder.CreateUAV(StyleTransferContentInputBuffer);
+	SceneColorToInputTensorParameters->OutputDimensions = {InputTensorDimensions.X, InputTensorDimensions.Y};
+	SceneColorToInputTensorParameters->HalfPixelUV = FVector2f(0.5f / SceneColorRenderTargetDimensions.X, 0.5 / SceneColorRenderTargetDimensions.Y);
+	FIntVector SceneColorToInputTensorGroupCount = FComputeShaderUtils::GetGroupCount(
+		{InputTensorDimensions.X, InputTensorDimensions.Y, 1},
+		FSceneColorToInputTensorCS::ThreadGroupSize
+	);
+
+	TShaderMapRef<FSceneColorToInputTensorCS> SceneColorToInputTensorCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("TextureToTensor"),
+		SceneColorToInputTensorParameters,
+		ERDGPassFlags::Compute,
+		[SceneColorToInputTensorCS, SceneColorToInputTensorParameters, SceneColorToInputTensorGroupCount](FRHICommandList& RHICommandList)
+		{
+			FComputeShaderUtils::Dispatch(RHICommandList, SceneColorToInputTensorCS,
+			                              *SceneColorToInputTensorParameters, SceneColorToInputTensorGroupCount);
+		}
+	);
+}
+
+FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& InOutInputs)
 {
 	const FSceneViewFamily& ViewFamily = *View.Family;
 
@@ -79,94 +207,20 @@ FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap
 
 	RDG_EVENT_SCOPE(GraphBuilder, "StyleTransfer");
 
-	//Get input and output viewports. Backbuffer could be targeting a different region than input viewport
-	const FScreenPassTextureViewport SceneColorViewport(SceneColor);
-
-	FScreenPassRenderTarget SceneColorRenderTarget(SceneColor, ERenderTargetLoadAction::ELoad);
-
 	checkSlow(View.bIsViewInfo);
 	const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
 
-	/*AddDrawScreenPass(GraphBuilder, RDG_EVENT_NAME("ProcessOCIOColorSpaceXfrm"), ViewInfo, BackBufferViewport,
-	                  SceneColorViewport, OCIOPixelShader, Parameters);*/
+	const FNeuralTensor& StyleTransferContentInputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, 0);
 
-	const FNeuralTensor& StyleTransferContentInputTensor = StyleTransferNetwork->GetInputTensorForContext(InferenceContext, 0);
+	TextureToTensor(GraphBuilder, SceneColor, StyleTransferContentInputTensor);
 
-	const FIntVector InputTensorDimensions = {
-		CastNarrowingSafe<int32>(StyleTransferContentInputTensor.GetSize(1)),
-		CastNarrowingSafe<int32>(StyleTransferContentInputTensor.GetSize(2)),
-		CastNarrowingSafe<int32>(StyleTransferContentInputTensor.GetSize(3)),
-	};
-	const FIntPoint SceneColorRenderTargetDimensions = SceneColorRenderTarget.Texture->Desc.Extent;
+	StyleTransferNetwork->Run(GraphBuilder, *InferenceContext);
 
-	FRDGBufferRef StyleTransferContentInputBuffer = GraphBuilder.RegisterExternalBuffer(StyleTransferContentInputTensor.GetPooledBuffer());
-	auto SceneColorToInputTensorParameters = GraphBuilder.AllocParameters<FSceneColorToInputTensorCS::FParameters>();
-	SceneColorToInputTensorParameters->TensorVolume = CastNarrowingSafe<uint32>(StyleTransferContentInputTensor.Num());
-	SceneColorToInputTensorParameters->InputTexture = SceneColorRenderTarget.Texture;
-	SceneColorToInputTensorParameters->InputTextureSampler = TStaticSamplerState<SF_Bilinear>::GetRHI();
-	SceneColorToInputTensorParameters->OutputUAV = GraphBuilder.CreateUAV(StyleTransferContentInputBuffer);
-	SceneColorToInputTensorParameters->OutputDimensions = {InputTensorDimensions.X, InputTensorDimensions.Y};
-	SceneColorToInputTensorParameters->HalfPixelUV = FVector2f(0.5f / SceneColorRenderTargetDimensions.X, 0.5 / SceneColorRenderTargetDimensions.Y);
-	FIntVector SceneColorToInputTensorGroupCount = FComputeShaderUtils::GetGroupCount(
-		{InputTensorDimensions.X, InputTensorDimensions.Y, 1},
-		FSceneColorToInputTensorCS::ThreadGroupSize
-	);
+	const FNeuralTensor& StyleTransferContentOutputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, 0);
+	FRDGTexture* StyleTransferRenderTargetTexture = TensorToTexture(GraphBuilder, SceneColor.Texture->Desc, StyleTransferContentOutputTensor);
 
-	TShaderMapRef<FSceneColorToInputTensorCS> SceneColorToInputTensorCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-	GraphBuilder.AddPass(
-		RDG_EVENT_NAME("SceneColorToInputTensor"),
-		SceneColorToInputTensorParameters,
-		ERDGPassFlags::Compute,
-		[SceneColorToInputTensorCS, SceneColorToInputTensorParameters, SceneColorToInputTensorGroupCount](FRHICommandList& RHICommandList)
-		{
-			FComputeShaderUtils::Dispatch(RHICommandList, SceneColorToInputTensorCS,
-			                              *SceneColorToInputTensorParameters, SceneColorToInputTensorGroupCount);
-		}
-	);
-
-
-	const FNeuralTensor& StyleTransferOutputTensor = StyleTransferNetwork->GetOutputTensorForContext(InferenceContext, 0);
-	FIntVector OutputTensorDimensions = {
-		CastNarrowingSafe<int32>(StyleTransferOutputTensor.GetSize(1)),
-		CastNarrowingSafe<int32>(StyleTransferOutputTensor.GetSize(2)),
-		CastNarrowingSafe<int32>(StyleTransferOutputTensor.GetSize(3)),
-	};
-	// Reusing the same output description for our back buffer as SceneColor
-	FRDGTextureDesc OutputDesc = SceneColor.Texture->Desc;
-	// this is flipped because the Output tensor has the vertical dimension first
-	// while unreal has the horizontal dimension first
-	OutputDesc.Extent = {OutputTensorDimensions[1], OutputTensorDimensions[0]};
-	OutputDesc.Flags |= TexCreate_RenderTargetable | TexCreate_UAV;
-	FLinearColor ClearColor(0., 0., 0., 0.);
-	OutputDesc.ClearValue = FClearValueBinding(ClearColor);
-	FRDGTexture* StyleTransferRenderTargetTexture = GraphBuilder.CreateTexture(
-		OutputDesc, TEXT("StyleTransferRenderTargetTexture"));
 	TSharedPtr<FScreenPassRenderTarget> StyleTransferOutputTarget = MakeShared<FScreenPassRenderTarget>(StyleTransferRenderTargetTexture, SceneColor.ViewRect,
 	                                                                                                    ERenderTargetLoadAction::EClear);
-
-	StyleTransferNetwork->Run(GraphBuilder, InferenceContext);
-
-	FRDGBufferRef StyleTransferOutputBuffer = GraphBuilder.RegisterExternalBuffer(StyleTransferContentInputTensor.GetPooledBuffer());
-
-	auto OutputTensorToSceneColorParameters = GraphBuilder.AllocParameters<FOutputTensorToSceneColorCS::FParameters>();
-	OutputTensorToSceneColorParameters->InputTensor = GraphBuilder.CreateSRV(StyleTransferOutputBuffer, EPixelFormat::PF_FloatRGB);
-	OutputTensorToSceneColorParameters->OutputTexture = GraphBuilder.CreateUAV(StyleTransferRenderTargetTexture);
-	FIntVector OutputTensorToSceneColorGroupCount = FComputeShaderUtils::GetGroupCount(
-		{OutputTensorDimensions.X, OutputTensorDimensions.Y, 1},
-		FOutputTensorToSceneColorCS::ThreadGroupSize
-	);
-
-	TShaderMapRef<FOutputTensorToSceneColorCS> OutputTensorToSceneColorCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-	GraphBuilder.AddPass(
-		RDG_EVENT_NAME("OutputTensorToSceneColor"),
-		OutputTensorToSceneColorParameters,
-		ERDGPassFlags::Compute,
-		[OutputTensorToSceneColorCS, OutputTensorToSceneColorParameters, OutputTensorToSceneColorGroupCount](FRHICommandList& RHICommandList)
-		{
-			FComputeShaderUtils::Dispatch(RHICommandList, OutputTensorToSceneColorCS,
-			                              *OutputTensorToSceneColorParameters, OutputTensorToSceneColorGroupCount);
-		}
-	);
 
 
 	TSharedPtr<FScreenPassRenderTarget> BackBufferRenderTarget;
@@ -174,8 +228,8 @@ FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap
 	if (InOutInputs.OverrideOutput.IsValid())
 	{
 		BackBufferRenderTarget = MakeShared<FScreenPassRenderTarget>(InOutInputs.OverrideOutput);
-		// @todo: do not use copy. Resample the styled 1920x960 texture to the fullscreen texture by drawing into the texture
-		AddCopyTexturePass(GraphBuilder, StyleTransferRenderTargetTexture, BackBufferRenderTarget->Texture);
+
+		AddRescalingTextureCopy(GraphBuilder, *StyleTransferOutputTarget->Texture, *BackBufferRenderTarget);
 	}
 	else
 	{

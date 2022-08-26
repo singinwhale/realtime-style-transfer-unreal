@@ -20,6 +20,7 @@ class STYLETRANSFERSHADERS_API FOutputTensorToSceneColorCS : public FGlobalShade
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER(uint32, TensorVolume)
+		SHADER_PARAMETER(FIntPoint, TextureSize)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float3>, InputTensor)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, OutputTexture)
 	END_SHADER_PARAMETER_STRUCT()

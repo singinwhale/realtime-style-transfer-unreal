@@ -3,23 +3,21 @@
 #include "/Engine/Public/Platform.ush"
 
 
+// this assumes that the OutputTexture has
+// the exact same dimensions as InputTensor!
+uint TensorVolume;
+uint2 TextureSize;
 RWTexture2D<float4> OutputTexture;
 Buffer<float> InputTensor;
 
+// DispatchThreadID corresponds to InputTensor shape dimensions not texture XY -> DispatchThreadID.X = Texture.Y
 [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
 void OutputTensorToSceneColorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
 {
-
-	uint TensorVolume;
-	InputTensor.GetDimensions(TensorVolume);
-
-	uint2 TextureSize = 0;
-	OutputTexture.GetDimensions(TextureSize.x, TextureSize.y);
-
 	// note that the input tensor has shape (1, Y, X, C)
 	// which is why we need to flip the indexing
-	const uint PixelIndex = DispatchThreadID.x * TextureSize.y + DispatchThreadID.x;
-	const uint GlobalIndex = PixelIndex * 3;
+	const uint TensorPixelNumber = DispatchThreadID.x * TextureSize.x + DispatchThreadID.y;
+	const uint GlobalIndex = TensorPixelNumber * 3;
 
 	if (GlobalIndex >= TensorVolume)
 	{
@@ -27,10 +25,11 @@ void OutputTensorToSceneColorCS(in const uint3 DispatchThreadID : SV_DispatchThr
 	}
 
 	const uint2 TextureCoords = uint2(DispatchThreadID.y, DispatchThreadID.x);
-	OutputTexture[TextureCoords] = float4(
+	const float4 RGBAColor = float4(
 		InputTensor[GlobalIndex + 0],
 		InputTensor[GlobalIndex + 1],
 		InputTensor[GlobalIndex + 2],
-		1.0f
+		0.0f
 	);
+	OutputTexture[TextureCoords] = RGBAColor;
 }

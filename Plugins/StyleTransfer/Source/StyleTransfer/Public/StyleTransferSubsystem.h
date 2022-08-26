@@ -24,6 +24,7 @@ public:
 	// --
 
 	void StartStylizingViewport(FViewportClient* ViewportClient);
+	void StopStylizingViewport();
 
 	void UpdateStyle(const FNeuralTensor& StyleImage);
 
@@ -37,7 +38,12 @@ private:
 	TObjectPtr<UNeuralNetwork> StylePredictionNetwork;
 
 	int32 StylePredictionInferenceContext = INDEX_NONE;
-	int32 StyleTransferInferenceContext = INDEX_NONE;
+	TSharedPtr<int32, ESPMode::ThreadSafe> StyleTransferInferenceContext;
+
 
 	int32 StyleTransferStyleParamsInputIndex = INDEX_NONE;
+
+	void HandleConsoleVariableChanged(IConsoleVariable*);
+
+	void LoadNetworks();
 };

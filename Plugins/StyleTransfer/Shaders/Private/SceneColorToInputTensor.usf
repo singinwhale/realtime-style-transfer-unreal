@@ -12,16 +12,16 @@ float2 HalfPixelUV;
 void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
 {
 	const uint2 OutputUAVTexelCoordinate = DispatchThreadID.xy;
-	if(any(OutputUAVTexelCoordinate > OutputDimensions))
+	if(any(OutputUAVTexelCoordinate >= OutputDimensions))
 	{
 		return;
 	}
 
-	const uint GlobalIndex = (OutputUAVTexelCoordinate.x * OutputDimensions.x + OutputUAVTexelCoordinate.y) * 3;
+	const uint GlobalIndex = ((OutputUAVTexelCoordinate.x * OutputDimensions.y + OutputUAVTexelCoordinate.y)*3);
 
-	// note that the input tensor has shape (1, Y, X, C)
+	// note that the OutputUAV has shape (1, Y, X, C)
 	// which is why we need to flip the indexing
-	const float2 UV = OutputUAVTexelCoordinate.yx / OutputDimensions.yx + HalfPixelUV;
+	const float2 UV = float2(OutputUAVTexelCoordinate.yx) / float2(OutputDimensions.yx) + HalfPixelUV;
 
 	const float4 TextureValue = InputTexture.SampleLevel(InputTextureSampler, UV, 0);
 

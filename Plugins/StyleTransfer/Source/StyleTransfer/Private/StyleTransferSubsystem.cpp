@@ -5,12 +5,116 @@
 
 #include "NeuralNetwork.h"
 #include "RenderGraphUtils.h"
+#include "StyleTransferModule.h"
 #include "StyleTransferSceneViewExtension.h"
+
+TAutoConsoleVariable<bool> CVarStyleTransferEnabled(
+	TEXT("r.StyleTransfer.Enabled"),
+	false,
+	TEXT("Set to true to enable style transfer")
+);
+
 
 void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
+	CVarStyleTransferEnabled->OnChangedDelegate().AddUObject(this, &UStyleTransferSubsystem::HandleConsoleVariableChanged);
+}
+
+void UStyleTransferSubsystem::Deinitialize()
+{
+	StopStylizingViewport();
+
+	Super::Deinitialize();
+}
+
+void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportClient)
+{
+	if (!StylePredictionNetwork->IsLoaded() || !StyleTransferNetwork->IsLoaded())
+	{
+		UE_LOG(LogStyleTransfer, Error, TEXT("Not all networks were loaded, can not stylize viewport."));
+		return;
+	}
+
+	if (!StyleTransferSceneViewExtension)
+	{
+		StylePredictionInferenceContext = StylePredictionNetwork->CreateInferenceContext();
+		checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StylePredictionNetwork"));
+		StyleTransferInferenceContext = MakeShared<int32>(StyleTransferNetwork->CreateInferenceContext());
+		checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
+
+		FlushRenderingCommands();
+		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
+	}
+	StyleTransferSceneViewExtension->SetEnabled(true);
+}
+
+void UStyleTransferSubsystem::StopStylizingViewport()
+{
+	FlushRenderingCommands();
+	StyleTransferSceneViewExtension.Reset();
+	if (StylePredictionInferenceContext != INDEX_NONE)
+	{
+		StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
+	}
+	if (StyleTransferInferenceContext && *StyleTransferInferenceContext != INDEX_NONE)
+	{
+		StyleTransferNetwork->DestroyInferenceContext(*StyleTransferInferenceContext);
+		*StyleTransferInferenceContext = INDEX_NONE;
+		StyleTransferInferenceContext.Reset();
+	}
+}
+
+void UStyleTransferSubsystem::UpdateStyle(const FNeuralTensor& StyleImage)
+{
+	checkf(StyleTransferSceneViewExtension.IsValid(), TEXT("Can not update style while not stylizing"));
+	checkf(StyleTransferInferenceContext.IsValid(), TEXT("Can not update style without inference context"));
+
+	StylePredictionNetwork->SetInputFromArrayCopy(StyleImage.GetArrayCopy<float>());
+
+	ENQUEUE_RENDER_COMMAND(StylePrediction)([this](FRHICommandListImmediate& RHICommandList)
+	{
+		FRDGBuilder GraphBuilder(RHICommandList);
+
+		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
+
+		const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
+		const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+
+		FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
+		FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
+		const uint64 NumBytes = OutputStyleParams.NumInBytes();
+		check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
+		check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
+		check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
+
+		AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
+
+		GraphBuilder.Execute();
+	});
+
+	FlushRenderingCommands();
+}
+
+void UStyleTransferSubsystem::HandleConsoleVariableChanged(IConsoleVariable* ConsoleVariable)
+{
+	check(ConsoleVariable == CVarStyleTransferEnabled.AsVariable());
+
+	StopStylizingViewport();
+
+	if (CVarStyleTransferEnabled->GetBool())
+	{
+		if(!(StyleTransferNetwork || StylePredictionNetwork))
+		{
+			LoadNetworks();
+		}
+		StartStylizingViewport(GetGameInstance()->GetGameViewportClient());
+	}
+}
+
+void UStyleTransferSubsystem::LoadNetworks()
+{
 	StyleTransferNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StyleTransfer.NN_StyleTransfer"));
 	StylePredictionNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StylePredictor.NN_StylePredictor"));
 
@@ -29,7 +133,7 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StyleTransferNetwork could not be loaded"));
+		UE_LOG(LogStyleTransfer, Error, TEXT("StyleTransferNetwork could not be loaded"));
 	}
 
 
@@ -39,61 +143,6 @@ void UStyleTransferSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StylePredictionNetwork could not be loaded."));
+		UE_LOG(LogStyleTransfer, Error, TEXT("StylePredictionNetwork could not be loaded."));
 	}
-}
-
-void UStyleTransferSubsystem::Deinitialize()
-{
-	StyleTransferSceneViewExtension.Reset();
-	if(StylePredictionInferenceContext != INDEX_NONE)
-	{
-		StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
-	}
-	if(StyleTransferInferenceContext != INDEX_NONE)
-	{
-		StyleTransferNetwork->DestroyInferenceContext(StyleTransferInferenceContext);
-	}
-
-	Super::Deinitialize();
-}
-
-void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportClient)
-{
-	StylePredictionInferenceContext = StylePredictionNetwork->CreateInferenceContext();
-	checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StylePredictionNetwork"));
-	StyleTransferInferenceContext = StyleTransferNetwork->CreateInferenceContext();
-	checkf(StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
-
-	StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext);
-}
-
-void UStyleTransferSubsystem::UpdateStyle(const FNeuralTensor& StyleImage)
-{
-	checkf(StyleTransferSceneViewExtension.IsValid(), TEXT("Can not update style while not stylizing"));
-
-	StylePredictionNetwork->SetInputFromArrayCopy(StyleImage.GetArrayCopy<float>());
-
-	ENQUEUE_RENDER_COMMAND(StylePrediction)([this](FRHICommandListImmediate& RHICommandList)
-	{
-		FRDGBuilder GraphBuilder(RHICommandList);
-
-		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
-
-		const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
-		const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
-
-		FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
-		FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
-		const uint64 NumBytes = OutputStyleParams.NumInBytes();
-		check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
-		check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
-		check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
-
-		AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
-
-		GraphBuilder.Execute();
-	});
-
-	FlushRenderingCommands();
 }
