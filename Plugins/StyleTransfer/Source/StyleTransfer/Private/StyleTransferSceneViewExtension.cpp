@@ -12,6 +12,9 @@
 #include "SceneView.h"
 #include "ScreenPass.h"
 #include "CommonRenderResources.h"
+#include "IPixWinPlugin.h"
+#include "IPixWinPlugin.h"
+#include "IRenderCaptureProvider.h"
 #include "NeuralNetwork.h"
 #include "RenderGraphEvent.h"
 #include "PostProcess/PostProcessing.h"
@@ -105,6 +108,30 @@ void FStyleTransferSceneViewExtension::SubscribeToPostProcessingPass(EPostProces
 		InOutPassCallbacks.Add(
 			FAfterPassCallbackDelegate::CreateRaw(
 				this, &FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap_RenderThread));
+	}
+}
+
+void FStyleTransferSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily)
+{
+	const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
+	if(!IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
+		return;
+
+	IRenderCaptureProvider& RenderCaptureProvider = IModularFeatures::Get().GetModularFeature<IRenderCaptureProvider>(RenderCaptureProviderType);
+	if(bIsEnabled && NumFramesCaptured == -1)
+	{
+		RenderCaptureProvider.BeginCapture(&GRHICommandList.GetImmediateCommandList());
+		NumFramesCaptured = 0;
+	}
+
+	if(NumFramesCaptured >= 0)
+	{
+		++NumFramesCaptured;
+	}
+
+	if(NumFramesCaptured == 10)
+	{
+		RenderCaptureProvider.EndCapture(&GRHICommandList.GetImmediateCommandList());
 	}
 }
 
@@ -216,7 +243,7 @@ FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap
 
 	StyleTransferNetwork->Run(GraphBuilder, *InferenceContext);
 
-	const FNeuralTensor& StyleTransferContentOutputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, 0);
+	const FNeuralTensor& StyleTransferContentOutputTensor = StyleTransferNetwork->GetOutputTensorForContext(*InferenceContext, 0);
 	FRDGTexture* StyleTransferRenderTargetTexture = TensorToTexture(GraphBuilder, SceneColor.Texture->Desc, StyleTransferContentOutputTensor);
 
 	TSharedPtr<FScreenPassRenderTarget> StyleTransferOutputTarget = MakeShared<FScreenPassRenderTarget>(StyleTransferRenderTargetTexture, SceneColor.ViewRect,

@@ -15,6 +15,7 @@ public:
 
 	// - ISceneViewExtension
 	virtual void SubscribeToPostProcessingPass(EPostProcessingPass Pass, FAfterPassCallbackDelegateArray& InOutPassCallbacks, bool bIsPassEnabled) override;
+	virtual void PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily) override;
 	FScreenPassTexture PostProcessPassAfterTonemap_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View,
 	                                                            const FPostProcessMaterialInputs& InOutInputs);
 	virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override;
@@ -33,6 +34,12 @@ public:
 	void SetEnabled(bool bInIsEnabled) { bIsEnabled = bInIsEnabled; }
 	bool IsEnabled() const { return bIsEnabled; }
 
+
+
+	static void AddRescalingTextureCopy(FRDGBuilder& GraphBuilder, FRDGTexture& RDGSourceTexture, FScreenPassRenderTarget& DestinationRenderTarget);
+	static FRDGTexture* TensorToTexture(FRDGBuilder& GraphBuilder, const FRDGTextureDesc& BaseDestinationDesc, const FNeuralTensor& SourceTensor);
+	static void TextureToTensor(FRDGBuilder& GraphBuilder, const FScreenPassTexture& SourceTexture, const FNeuralTensor& DestinationTensor);
+
 private:
 	/** The actual Network pointer is not tracked so we need a WeakPtr too so we can check its validity on the game thread. */
 	TWeakObjectPtr<UNeuralNetwork> StyleTransferNetworkWeakPtr;
@@ -44,7 +51,5 @@ private:
 
 	bool bIsEnabled = true;
 
-	void AddRescalingTextureCopy(FRDGBuilder& GraphBuilder, FRDGTexture& RDGSourceTexture, FScreenPassRenderTarget& DestinationRenderTarget);
-	FRDGTexture* TensorToTexture(FRDGBuilder& GraphBuilder, const FRDGTextureDesc& BaseDestinationDesc, const FNeuralTensor& SourceTensor);
-	void TextureToTensor(FRDGBuilder& GraphBuilder, const FScreenPassTexture& SourceTexture, const FNeuralTensor& DestinationTensor);
+	int32 NumFramesCaptured = -1;
 };

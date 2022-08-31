@@ -3,7 +3,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "NeuralTensor.h"
 #include "StyleTransferSceneViewExtension.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "UObject/Object.h"
@@ -26,7 +25,7 @@ public:
 	void StartStylizingViewport(FViewportClient* ViewportClient);
 	void StopStylizingViewport();
 
-	void UpdateStyle(const FNeuralTensor& StyleImage);
+	void UpdateStyle(UTexture2D* StyleTexture);
 
 private:
 	FStyleTransferSceneViewExtension::Ptr StyleTransferSceneViewExtension;

@@ -32,6 +32,10 @@
     {
       "Name": "NeuralNetworkInference",
       "Enabled": true
+    },
+    {
+      "Name": "PixWinPlugin",
+      "Enabled": true
     }
   ]
 }

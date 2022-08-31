@@ -5,8 +5,10 @@
 
 #include "NeuralNetwork.h"
 #include "RenderGraphUtils.h"
+#include "ScreenPass.h"
 #include "StyleTransferModule.h"
 #include "StyleTransferSceneViewExtension.h"
+#include "Rendering/Texture2DResource.h"
 
 TAutoConsoleVariable<bool> CVarStyleTransferEnabled(
 	TEXT("r.StyleTransfer.Enabled"),
@@ -44,8 +46,10 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 		StyleTransferInferenceContext = MakeShared<int32>(StyleTransferNetwork->CreateInferenceContext());
 		checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
 
-		FlushRenderingCommands();
+		UTexture2D* StyleTexture = LoadObject<UTexture2D>(this, TEXT("/Script/Engine.Texture2D'/StyleTransfer/T_StyleImage.T_StyleImage'"));
+		UpdateStyle(StyleTexture);
 		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
+
 	}
 	StyleTransferSceneViewExtension->SetEnabled(true);
 }
@@ -66,16 +70,26 @@ void UStyleTransferSubsystem::StopStylizingViewport()
 	}
 }
 
-void UStyleTransferSubsystem::UpdateStyle(const FNeuralTensor& StyleImage)
+void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture)
 {
-	checkf(StyleTransferSceneViewExtension.IsValid(), TEXT("Can not update style while not stylizing"));
-	checkf(StyleTransferInferenceContext.IsValid(), TEXT("Can not update style without inference context"));
+	checkf(StyleTransferInferenceContext.IsValid() && (*StyleTransferInferenceContext) != INDEX_NONE, TEXT("Can not infer style without inference context"));
+	checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Can not update style without inference context"));
 
-	StylePredictionNetwork->SetInputFromArrayCopy(StyleImage.GetArrayCopy<float>());
-
-	ENQUEUE_RENDER_COMMAND(StylePrediction)([this](FRHICommandListImmediate& RHICommandList)
+	ENQUEUE_RENDER_COMMAND(StylePrediction)([this, StyleTexture](FRHICommandListImmediate& RHICommandList)
 	{
 		FRDGBuilder GraphBuilder(RHICommandList);
+
+
+		const FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContext(StylePredictionInferenceContext, 0);
+
+		FTextureResource* StyleTextureResource = StyleTexture->GetResource();
+		if(!StyleTextureResource->IsInitialized())
+		{
+			StyleTextureResource->UpdateRHI();
+		}
+
+		FRDGTextureRef RDGStyleTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(StyleTextureResource->TextureRHI, TEXT("StyleInputTexture")));
+		FStyleTransferSceneViewExtension::TextureToTensor(GraphBuilder, FScreenPassTexture(RDGStyleTexture), InputStyleImageTensor);
 
 		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
 

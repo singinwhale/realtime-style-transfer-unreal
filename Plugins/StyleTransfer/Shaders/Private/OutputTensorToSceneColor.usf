@@ -1,7 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
-
-#include "/Engine/Public/Platform.ush"
-
+// Copyright 2022 Manuel Wagner - All rights reserved
 
 // this assumes that the OutputTexture has
 // the exact same dimensions as InputTensor!
@@ -33,3 +30,5 @@ void OutputTensorToSceneColorCS(in const uint3 DispatchThreadID : SV_DispatchThr
 	);
 	OutputTexture[TextureCoords] = RGBAColor;
 }
+
+#include "/Engine/Public/Platform.ush"

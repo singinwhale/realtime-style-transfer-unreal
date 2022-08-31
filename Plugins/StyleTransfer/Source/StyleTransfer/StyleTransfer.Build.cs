@@ -42,7 +42,9 @@ public class StyleTransfer : ModuleRules
 				"RenderCore",
 				"Renderer",
 				"Projects",
-				"StyleTransferShaders"
+				"StyleTransferShaders",
+				"PixWinPlugin",
+				"InputDevice",
 			}
 		);
 

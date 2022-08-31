@@ -1,6 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
-
-#include "/Engine/Public/Platform.ush"
+// Copyright 2022 Manuel Wagner - All rights reserved
 
 Texture2D<float4> InputTexture;
 SamplerState InputTextureSampler;
@@ -29,3 +27,5 @@ void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThre
 	OutputUAV[GlobalIndex + 1] = TextureValue.g;
 	OutputUAV[GlobalIndex + 2] = TextureValue.b;
 }
+
+#include "/Engine/Public/Platform.ush"
