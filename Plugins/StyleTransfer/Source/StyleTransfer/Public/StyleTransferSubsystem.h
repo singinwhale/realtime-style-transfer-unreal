@@ -26,6 +26,7 @@ public:
 	void StopStylizingViewport();
 
 	void UpdateStyle(UTexture2D* StyleTexture);
+	void UpdateStyle(FString StyleTensorDataPath);
 
 private:
 	FStyleTransferSceneViewExtension::Ptr StyleTransferSceneViewExtension;

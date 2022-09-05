@@ -113,6 +113,7 @@ void FStyleTransferSceneViewExtension::SubscribeToPostProcessingPass(EPostProces
 
 void FStyleTransferSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily)
 {
+	return;
 	const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
 	if(!IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
 		return;
@@ -181,19 +182,19 @@ FRDGTexture* FStyleTransferSceneViewExtension::TensorToTexture(FRDGBuilder& Grap
 	return OutputTexture;
 }
 
-void FStyleTransferSceneViewExtension::TextureToTensor(FRDGBuilder& GraphBuilder, const FScreenPassTexture& SourceTexture, const FNeuralTensor& DestinationTensor)
+void FStyleTransferSceneViewExtension::TextureToTensor(FRDGBuilder& GraphBuilder, FRDGTextureRef SourceTexture, const FNeuralTensor& DestinationTensor)
 {
 	const FIntVector InputTensorDimensions = {
 		CastNarrowingSafe<int32>(DestinationTensor.GetSize(1)),
 		CastNarrowingSafe<int32>(DestinationTensor.GetSize(2)),
 		CastNarrowingSafe<int32>(DestinationTensor.GetSize(3)),
 	};
-	const FIntPoint SceneColorRenderTargetDimensions = SourceTexture.Texture->Desc.Extent;
+	const FIntPoint SceneColorRenderTargetDimensions = SourceTexture->Desc.Extent;
 
 	FRDGBufferRef StyleTransferContentInputBuffer = GraphBuilder.RegisterExternalBuffer(DestinationTensor.GetPooledBuffer());
 	auto SceneColorToInputTensorParameters = GraphBuilder.AllocParameters<FSceneColorToInputTensorCS::FParameters>();
 	SceneColorToInputTensorParameters->TensorVolume = CastNarrowingSafe<uint32>(DestinationTensor.Num());
-	SceneColorToInputTensorParameters->InputTexture = SourceTexture.Texture;
+	SceneColorToInputTensorParameters->InputTexture = SourceTexture;
 	SceneColorToInputTensorParameters->InputTextureSampler = TStaticSamplerState<SF_Bilinear>::GetRHI();
 	SceneColorToInputTensorParameters->OutputUAV = GraphBuilder.CreateUAV(StyleTransferContentInputBuffer);
 	SceneColorToInputTensorParameters->OutputDimensions = {InputTensorDimensions.X, InputTensorDimensions.Y};
@@ -239,7 +240,7 @@ FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap
 
 	const FNeuralTensor& StyleTransferContentInputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, 0);
 
-	TextureToTensor(GraphBuilder, SceneColor, StyleTransferContentInputTensor);
+	TextureToTensor(GraphBuilder, SceneColor.Texture, StyleTransferContentInputTensor);
 
 	StyleTransferNetwork->Run(GraphBuilder, *InferenceContext);
 

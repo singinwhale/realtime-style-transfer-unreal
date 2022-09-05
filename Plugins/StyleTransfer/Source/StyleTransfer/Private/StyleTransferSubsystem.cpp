@@ -3,11 +3,13 @@
 
 #include "StyleTransferSubsystem.h"
 
+#include "IRenderCaptureProvider.h"
 #include "NeuralNetwork.h"
 #include "RenderGraphUtils.h"
 #include "ScreenPass.h"
 #include "StyleTransferModule.h"
 #include "StyleTransferSceneViewExtension.h"
+#include "TextureCompiler.h"
 #include "Rendering/Texture2DResource.h"
 
 TAutoConsoleVariable<bool> CVarStyleTransferEnabled(
@@ -47,11 +49,14 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 		checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
 
 		UTexture2D* StyleTexture = LoadObject<UTexture2D>(this, TEXT("/Script/Engine.Texture2D'/StyleTransfer/T_StyleImage.T_StyleImage'"));
-		UpdateStyle(StyleTexture);
+		FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
+		//UpdateStyle(StyleTexture);
+		UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
 		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
 
 	}
 	StyleTransferSceneViewExtension->SetEnabled(true);
+	ViewportClient->GetWorld()->GetWorldSettings()->SetPauserPlayerState(ViewportClient->GetWorld()->GetFirstPlayerController()->PlayerState);
 }
 
 void UStyleTransferSubsystem::StopStylizingViewport()
@@ -74,40 +79,72 @@ void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture)
 {
 	checkf(StyleTransferInferenceContext.IsValid() && (*StyleTransferInferenceContext) != INDEX_NONE, TEXT("Can not infer style without inference context"));
 	checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Can not update style without inference context"));
-
+	FlushRenderingCommands();
 	ENQUEUE_RENDER_COMMAND(StylePrediction)([this, StyleTexture](FRHICommandListImmediate& RHICommandList)
 	{
-		FRDGBuilder GraphBuilder(RHICommandList);
-
-
-		const FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContext(StylePredictionInferenceContext, 0);
-
-		FTextureResource* StyleTextureResource = StyleTexture->GetResource();
-		if(!StyleTextureResource->IsInitialized())
+		IRenderCaptureProvider* RenderCaptureProvider = nullptr;
+		const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
+		if(IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
 		{
-			StyleTextureResource->UpdateRHI();
+			RenderCaptureProvider = &IModularFeatures::Get().GetModularFeature<IRenderCaptureProvider>(RenderCaptureProviderType);
+			RenderCaptureProvider->BeginCapture(&RHICommandList);
 		}
 
-		FRDGTextureRef RDGStyleTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(StyleTextureResource->TextureRHI, TEXT("StyleInputTexture")));
-		FStyleTransferSceneViewExtension::TextureToTensor(GraphBuilder, FScreenPassTexture(RDGStyleTexture), InputStyleImageTensor);
+		FRDGBuilder GraphBuilder(RHICommandList);
+		{
+			RDG_EVENT_SCOPE(GraphBuilder, "StylePrediction");
 
-		StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
+			const FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContext(StylePredictionInferenceContext, 0);
+			FTextureResource* StyleTextureResource = StyleTexture->GetResource();
+			FRDGTextureRef RDGStyleTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(StyleTextureResource->TextureRHI, TEXT("StyleInputTexture")));
+			FStyleTransferSceneViewExtension::TextureToTensor(GraphBuilder, RDGStyleTexture, InputStyleImageTensor);
 
-		const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
-		const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+			StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
 
-		FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
-		FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
-		const uint64 NumBytes = OutputStyleParams.NumInBytes();
-		check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
-		check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
-		check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
+			const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
+			const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
 
-		AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
+			FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
+			FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
+			const uint64 NumBytes = OutputStyleParams.NumInBytes();
+			check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
+			check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
+			check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
 
+			AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
+		}
 		GraphBuilder.Execute();
+
+		if(RenderCaptureProvider)
+		{
+			RenderCaptureProvider->EndCapture(&RHICommandList);
+		}
 	});
 
+	FlushRenderingCommands();
+}
+
+void UStyleTransferSubsystem::UpdateStyle(FString StyleTensorDataPath)
+{
+	FArchive& FileReader = *IFileManager::Get().CreateFileReader(*StyleTensorDataPath);
+	TArray<float> StyleParams;
+	StyleParams.SetNumUninitialized(192);
+
+	FileReader << StyleParams;
+
+	ENQUEUE_RENDER_COMMAND(StyleParamsLoad)([this, StyleParams = MoveTemp(StyleParams)](FRHICommandListImmediate& RHICommandList)
+	{
+		const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+
+		FRDGBuilder GraphBuilder(RHICommandList);
+		{
+			RDG_EVENT_SCOPE(GraphBuilder, "StyleParamsLoad");
+
+			FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
+			GraphBuilder.QueueBufferUpload(InputStyleParamsBuffer, StyleParams.GetData(), StyleParams.Num() * StyleParams.GetTypeSize(), ERDGInitialDataFlags::NoCopy);
+		}
+		GraphBuilder.Execute();
+	});
 	FlushRenderingCommands();
 }
 
