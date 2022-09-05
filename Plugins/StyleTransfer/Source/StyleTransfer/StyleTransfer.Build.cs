@@ -45,13 +45,7 @@ public class StyleTransfer : ModuleRules
 				"StyleTransferShaders",
 				"PixWinPlugin",
 				"InputDevice",
-			}
-		);
-
-
-		DynamicallyLoadedModuleNames.AddRange(
-			new string[]
-			{
+				"DeveloperSettings",
 			}
 		);
 	}

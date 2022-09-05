@@ -9,6 +9,7 @@
 #include "ScreenPass.h"
 #include "StyleTransferModule.h"
 #include "StyleTransferSceneViewExtension.h"
+#include "StyleTransferSettings.h"
 #include "TextureCompiler.h"
 #include "Rendering/Texture2DResource.h"
 
@@ -43,20 +44,21 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 
 	if (!StyleTransferSceneViewExtension)
 	{
+		const UStyleTransferSettings* StyleTransferSettings = GetDefault<UStyleTransferSettings>();
 		StylePredictionInferenceContext = StylePredictionNetwork->CreateInferenceContext();
 		checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StylePredictionNetwork"));
 		StyleTransferInferenceContext = MakeShared<int32>(StyleTransferNetwork->CreateInferenceContext());
 		checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
 
-		UTexture2D* StyleTexture = LoadObject<UTexture2D>(this, TEXT("/Script/Engine.Texture2D'/StyleTransfer/T_StyleImage.T_StyleImage'"));
+		UTexture2D* StyleTexture = StyleTransferSettings->StyleTexture.LoadSynchronous();
+		//UTexture2D* StyleTexture = LoadObject<UTexture2D>(this, TEXT("/Script/Engine.Texture2D'/StyleTransfer/T_StyleImage.T_StyleImage'"));
 		FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
-		//UpdateStyle(StyleTexture);
-		UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
+		UpdateStyle(StyleTexture);
+		//UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
 		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
 
 	}
 	StyleTransferSceneViewExtension->SetEnabled(true);
-	ViewportClient->GetWorld()->GetWorldSettings()->SetPauserPlayerState(ViewportClient->GetWorld()->GetFirstPlayerController()->PlayerState);
 }
 
 void UStyleTransferSubsystem::StopStylizingViewport()
@@ -166,8 +168,9 @@ void UStyleTransferSubsystem::HandleConsoleVariableChanged(IConsoleVariable* Con
 
 void UStyleTransferSubsystem::LoadNetworks()
 {
-	StyleTransferNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StyleTransfer.NN_StyleTransfer"));
-	StylePredictionNetwork = LoadObject<UNeuralNetwork>(this, TEXT("/StyleTransfer/NN_StylePredictor.NN_StylePredictor"));
+	const UStyleTransferSettings* StyleTransferSettings = GetDefault<UStyleTransferSettings>();
+	StyleTransferNetwork = StyleTransferSettings->StyleTransferNetwork.LoadSynchronous();
+	StylePredictionNetwork = StyleTransferSettings->StylePredictionNetwork.LoadSynchronous();
 
 	if (StyleTransferNetwork->IsLoaded())
 	{
