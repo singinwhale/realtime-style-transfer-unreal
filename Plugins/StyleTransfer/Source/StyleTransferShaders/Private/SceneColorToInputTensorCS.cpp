@@ -1,7 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SceneColorToInputTensorCS.h"
-#include "Utils.h"
 
 const FIntVector FSceneColorToInputTensorCS::ThreadGroupSize{8, 8, 1};
 

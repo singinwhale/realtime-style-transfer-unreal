@@ -52,10 +52,12 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 
 		UTexture2D* StyleTexture = StyleTransferSettings->StyleTexture.LoadSynchronous();
 		//UTexture2D* StyleTexture = LoadObject<UTexture2D>(this, TEXT("/Script/Engine.Texture2D'/StyleTransfer/T_StyleImage.T_StyleImage'"));
+#if WITH_EDITOR
 		FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
+#endif
 		UpdateStyle(StyleTexture);
 		//UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
-		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
+		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient->GetWorld(), ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
 
 	}
 	StyleTransferSceneViewExtension->SetEnabled(true);
@@ -68,6 +70,7 @@ void UStyleTransferSubsystem::StopStylizingViewport()
 	if (StylePredictionInferenceContext != INDEX_NONE)
 	{
 		StylePredictionNetwork->DestroyInferenceContext(StylePredictionInferenceContext);
+		StylePredictionInferenceContext = INDEX_NONE;
 	}
 	if (StyleTransferInferenceContext && *StyleTransferInferenceContext != INDEX_NONE)
 	{

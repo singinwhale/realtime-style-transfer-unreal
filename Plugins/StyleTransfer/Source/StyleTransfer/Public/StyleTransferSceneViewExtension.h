@@ -5,20 +5,25 @@ struct FNeuralTensor;
 struct FScreenPassRenderTarget;
 class UNeuralNetwork;
 
-class FStyleTransferSceneViewExtension : public FSceneViewExtensionBase
+class FStyleTransferSceneViewExtension : public FWorldSceneViewExtension
 {
 public:
 	using Ptr = TSharedPtr<FStyleTransferSceneViewExtension, ESPMode::ThreadSafe>;
 	using Ref = TSharedRef<FStyleTransferSceneViewExtension, ESPMode::ThreadSafe>;
 
-	FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, TSharedRef<int32> InInferenceContext);
+	FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, UWorld* World, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, TSharedRef<int32> InInferenceContext);
 
 	// - ISceneViewExtension
 	virtual void SubscribeToPostProcessingPass(EPostProcessingPass Pass, FAfterPassCallbackDelegateArray& InOutPassCallbacks, bool bIsPassEnabled) override;
+
 	virtual void PreRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily) override;
+
 	FScreenPassTexture PostProcessPassAfterTonemap_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View,
 	                                                            const FPostProcessMaterialInputs& InOutInputs);
-	virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override;
+
+	virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override
+	{
+	}
 
 	virtual void SetupView(FSceneViewFamily& InViewFamily, FSceneView& InView) override
 	{
@@ -33,7 +38,6 @@ public:
 
 	void SetEnabled(bool bInIsEnabled) { bIsEnabled = bInIsEnabled; }
 	bool IsEnabled() const { return bIsEnabled; }
-
 
 
 	static void AddRescalingTextureCopy(FRDGBuilder& GraphBuilder, FRDGTexture& RDGSourceTexture, FScreenPassRenderTarget& DestinationRenderTarget);

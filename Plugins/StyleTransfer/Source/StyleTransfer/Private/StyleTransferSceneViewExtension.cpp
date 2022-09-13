@@ -40,8 +40,8 @@ OutType CastNarrowingSafe(InType InValue)
 }
 
 
-FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, TSharedRef<int32> InInferenceContext)
-	: FSceneViewExtensionBase(AutoRegister)
+FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRegister& AutoRegister, UWorld* World, FViewportClient* AssociatedViewportClient, UNeuralNetwork* InStyleTransferNetwork, TSharedRef<int32> InInferenceContext)
+	: FWorldSceneViewExtension(AutoRegister, World)
 	  , StyleTransferNetworkWeakPtr(InStyleTransferNetwork)
 	  , StyleTransferNetwork(InStyleTransferNetwork)
 	  , LinkedViewportClient(AssociatedViewportClient)
@@ -50,14 +50,12 @@ FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRe
 	ensure(InStyleTransferNetwork->GetDeviceType() == ENeuralDeviceType::GPU);
 }
 
-void FStyleTransferSceneViewExtension::SetupViewFamily(FSceneViewFamily& InViewFamily)
-{
-}
-
 bool FStyleTransferSceneViewExtension::IsActiveThisFrame_Internal(const FSceneViewExtensionContext& Context) const
 {
 	check(IsInGameThread());
-	return bIsEnabled && *InferenceContext != -1 && StyleTransferNetworkWeakPtr.IsValid();
+	return FWorldSceneViewExtension::IsActiveThisFrame_Internal(Context)
+		&& bIsEnabled
+		&& *InferenceContext != -1 && StyleTransferNetworkWeakPtr.IsValid();
 }
 
 void FStyleTransferSceneViewExtension::AddRescalingTextureCopy(FRDGBuilder& GraphBuilder, FRDGTexture& RDGSourceTexture, FScreenPassRenderTarget& DestinationRenderTarget)
@@ -115,22 +113,22 @@ void FStyleTransferSceneViewExtension::PreRenderViewFamily_RenderThread(FRDGBuil
 {
 	return;
 	const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
-	if(!IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
+	if (!IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
 		return;
 
 	IRenderCaptureProvider& RenderCaptureProvider = IModularFeatures::Get().GetModularFeature<IRenderCaptureProvider>(RenderCaptureProviderType);
-	if(bIsEnabled && NumFramesCaptured == -1)
+	if (bIsEnabled && NumFramesCaptured == -1)
 	{
 		RenderCaptureProvider.BeginCapture(&GRHICommandList.GetImmediateCommandList());
 		NumFramesCaptured = 0;
 	}
 
-	if(NumFramesCaptured >= 0)
+	if (NumFramesCaptured >= 0)
 	{
 		++NumFramesCaptured;
 	}
 
-	if(NumFramesCaptured == 10)
+	if (NumFramesCaptured == 10)
 	{
 		RenderCaptureProvider.EndCapture(&GRHICommandList.GetImmediateCommandList());
 	}
@@ -219,8 +217,6 @@ void FStyleTransferSceneViewExtension::TextureToTensor(FRDGBuilder& GraphBuilder
 
 FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& InOutInputs)
 {
-	const FSceneViewFamily& ViewFamily = *View.Family;
-
 	const FScreenPassTexture& SceneColor = InOutInputs.Textures[(uint32)EPostProcessMaterialInput::SceneColor];
 
 	if (!EnumHasAnyFlags(SceneColor.Texture->Desc.Flags, TexCreate_ShaderResource))
