@@ -24,5 +24,8 @@ public:
 	TSoftObjectPtr<UNeuralNetwork> StylePredictionNetwork = nullptr;
 
 	UPROPERTY(EditAnywhere, Config)
-	TSoftObjectPtr<UTexture2D> StyleTexture = nullptr;
+	TArray<TSoftObjectPtr<UTexture2D>> StyleTextures;
+
+	UPROPERTY(EditAnywhere, Config)
+	FRuntimeFloatCurve InterpolationCurve;
 };

@@ -1,0 +1,21 @@
+// Copyright 2022 Manuel Wagner - All rights reserved
+
+RWBuffer<float> OutputUAV;
+Buffer<float> InputSrvA;
+Buffer<float> InputSrvB;
+uint TensorVolume;
+float Alpha;
+
+[numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
+void InterpolateTensorsCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
+{
+	const uint Index = DispatchThreadID.x;
+	if (Index >= TensorVolume)
+	{
+		return;
+	}
+
+	OutputUAV[Index] = lerp(InputSrvA[Index], InputSrvB[Index], Alpha);
+}
+
+#include "/Engine/Public/Platform.ush"

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "IRenderCaptureProvider.h"
 #include "StyleTransferSceneViewExtension.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "UObject/Object.h"
@@ -12,7 +13,7 @@
  *
  */
 UCLASS()
-class STYLETRANSFER_API UStyleTransferSubsystem : public UGameInstanceSubsystem
+class STYLETRANSFER_API UStyleTransferSubsystem : public UGameInstanceSubsystem, public FTSTickerObjectBase
 {
 	GENERATED_BODY()
 
@@ -22,11 +23,16 @@ public:
 	virtual void Deinitialize() override;
 	// --
 
+	// - FTSTickerObjectBase
+	virtual bool Tick(float DeltaTime) override final;
+	// --
+
 	void StartStylizingViewport(FViewportClient* ViewportClient);
 	void StopStylizingViewport();
 
-	void UpdateStyle(UTexture2D* StyleTexture);
+	void UpdateStyle(UTexture2D* StyleTexture, int32 StylePredictionInferenceContext);
 	void UpdateStyle(FString StyleTensorDataPath);
+	void InterpolateStyles(int32 StylePredictionInferenceContextA, int32 StylePredictionInferenceContextB, float Alpha);
 
 private:
 	FStyleTransferSceneViewExtension::Ptr StyleTransferSceneViewExtension;
@@ -37,7 +43,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UNeuralNetwork> StylePredictionNetwork;
 
-	int32 StylePredictionInferenceContext = INDEX_NONE;
+	TArray<int32> StylePredictionInferenceContexts;
 	TSharedPtr<int32, ESPMode::ThreadSafe> StyleTransferInferenceContext;
 
 
@@ -46,4 +52,6 @@ private:
 	void HandleConsoleVariableChanged(IConsoleVariable*);
 
 	void LoadNetworks();
+
+	IRenderCaptureProvider* ConditionalBeginRenderCapture(FRHICommandListImmediate& RHICommandList);
 };

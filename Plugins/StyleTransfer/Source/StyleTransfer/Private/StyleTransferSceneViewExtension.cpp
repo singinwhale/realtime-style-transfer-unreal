@@ -12,6 +12,7 @@
 #include "SceneView.h"
 #include "ScreenPass.h"
 #include "CommonRenderResources.h"
+#include "InterpolateTensorsCS.h"
 #include "IPixWinPlugin.h"
 #include "IPixWinPlugin.h"
 #include "IRenderCaptureProvider.h"
@@ -211,6 +212,39 @@ void FStyleTransferSceneViewExtension::TextureToTensor(FRDGBuilder& GraphBuilder
 		{
 			FComputeShaderUtils::Dispatch(RHICommandList, SceneColorToInputTensorCS,
 			                              *SceneColorToInputTensorParameters, SceneColorToInputTensorGroupCount);
+		}
+	);
+}
+
+void FStyleTransferSceneViewExtension::InterpolateTensors(FRDGBuilder& GraphBuilder, const FNeuralTensor& DestinationTensor, const FNeuralTensor& InputTensorA, const FNeuralTensor& InputTensorB, float Alpha)
+{
+	RDG_EVENT_SCOPE(GraphBuilder, "InterpolateTensors");
+
+	const FRDGBufferRef DestinationBuffer = GraphBuilder.RegisterExternalBuffer(DestinationTensor.GetPooledBuffer());
+	const FRDGBufferRef InputBufferA = GraphBuilder.RegisterExternalBuffer(InputTensorA.GetPooledBuffer());
+	const FRDGBufferRef InputBufferB = GraphBuilder.RegisterExternalBuffer(InputTensorB.GetPooledBuffer());
+
+
+	auto InterpolateTensorsParameters = GraphBuilder.AllocParameters<FInterpolateTensorsCS::FParameters>();
+	InterpolateTensorsParameters->InputSrvA = GraphBuilder.CreateSRV(InputBufferA, EPixelFormat::PF_R32_FLOAT);
+	InterpolateTensorsParameters->InputSrvB = GraphBuilder.CreateSRV(InputBufferB, EPixelFormat::PF_R32_FLOAT);
+	InterpolateTensorsParameters->OutputUAV = GraphBuilder.CreateUAV(DestinationBuffer);
+	InterpolateTensorsParameters->Alpha = Alpha;
+	InterpolateTensorsParameters->TensorVolume = DestinationTensor.Num();
+	FIntVector InterpolateTensorsThreadGroupCount = FComputeShaderUtils::GetGroupCount(
+		{CastNarrowingSafe<int32>(DestinationTensor.Num()), 1, 1},
+		FInterpolateTensorsCS::ThreadGroupSize
+	);
+
+	TShaderMapRef<FInterpolateTensorsCS> InterpolateTensorsCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("InterpolateTensors"),
+		InterpolateTensorsParameters,
+		ERDGPassFlags::Compute,
+		[InterpolateTensorsCS, InterpolateTensorsParameters, InterpolateTensorsThreadGroupCount](FRHICommandList& RHICommandList)
+		{
+			FComputeShaderUtils::Dispatch(RHICommandList, InterpolateTensorsCS,
+										  *InterpolateTensorsParameters, InterpolateTensorsThreadGroupCount);
 		}
 	);
 }

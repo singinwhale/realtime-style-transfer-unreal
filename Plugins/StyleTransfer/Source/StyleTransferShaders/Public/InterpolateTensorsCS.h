@@ -11,25 +11,22 @@
 
 
 
-class STYLETRANSFERSHADERS_API FSceneColorToInputTensorCS : public FGlobalShader
+class STYLETRANSFERSHADERS_API FInterpolateTensorsCS : public FGlobalShader
 {
-	DECLARE_GLOBAL_SHADER(FSceneColorToInputTensorCS);
-	SHADER_USE_PARAMETER_STRUCT(FSceneColorToInputTensorCS, FGlobalShader)
+	DECLARE_GLOBAL_SHADER(FInterpolateTensorsCS);
+	SHADER_USE_PARAMETER_STRUCT(FInterpolateTensorsCS, FGlobalShader)
 
 
 	static const FIntVector ThreadGroupSize;
 
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		// Input variables
-		SHADER_PARAMETER(uint32, TensorVolume)
-		// SRV/UAV variables
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<float>, OutputUAV)
-		// Optional SRV/UAV variables
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
-		SHADER_PARAMETER_SAMPLER(SamplerState, InputTextureSampler)
-		SHADER_PARAMETER(FIntPoint, OutputDimensions)
-		SHADER_PARAMETER(FVector2f, HalfPixelUV)
+		// Unreal sadly does not support arrays of Buffers in shader compiler
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InputSrvA)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<float>, InputSrvB)
+		SHADER_PARAMETER(float, Alpha)
+		SHADER_PARAMETER(uint32, TensorVolume)
 	END_SHADER_PARAMETER_STRUCT()
 
 	// - FShader
