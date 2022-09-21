@@ -30,7 +30,7 @@ public:
 	void StartStylizingViewport(FViewportClient* ViewportClient);
 	void StopStylizingViewport();
 
-	void UpdateStyle(UTexture2D* StyleTexture, int32 StylePredictionInferenceContext);
+	void UpdateStyle(UTexture2D* StyleTexture, uint32 StyleIndex, int32 StylePredictionInferenceContext);
 	void UpdateStyle(FString StyleTensorDataPath);
 	void InterpolateStyles(int32 StylePredictionInferenceContextA, int32 StylePredictionInferenceContextB, float Alpha);
 
@@ -52,6 +52,7 @@ private:
 	void HandleConsoleVariableChanged(IConsoleVariable*);
 
 	void LoadNetworks();
-
-	IRenderCaptureProvider* ConditionalBeginRenderCapture(FRHICommandListImmediate& RHICommandList);
 };
+
+IRenderCaptureProvider* BeginRenderCapture(FRHICommandListImmediate& RHICommandList);
+IRenderCaptureProvider* ConditionalBeginRenderCapture(FRHICommandListImmediate& RHICommandList);

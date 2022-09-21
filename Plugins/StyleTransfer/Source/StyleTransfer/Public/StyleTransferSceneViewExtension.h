@@ -57,4 +57,8 @@ private:
 	bool bIsEnabled = true;
 
 	int32 NumFramesCaptured = -1;
+
+	int32 ContentInputTensorIndex = INDEX_NONE;
+	int32 StyleWeightsInputTensorIndex = INDEX_NONE;
+	int32 StyleParamsInputTensorIndex = INDEX_NONE;
 };

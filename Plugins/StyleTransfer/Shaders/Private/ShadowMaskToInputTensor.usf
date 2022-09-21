@@ -7,7 +7,7 @@ uint2 OutputDimensions; // X = InputTensor.GetSize(1), Y = InputTensor.GetSize(2
 float2 HalfPixelUV;
 
 [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]
-void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
+void ShadowMaskToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThreadID)
 {
 	const uint2 OutputUAVTexelCoordinate = DispatchThreadID.xy;
 	if(any(OutputUAVTexelCoordinate >= OutputDimensions))
@@ -15,7 +15,7 @@ void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThre
 		return;
 	}
 
-	const uint GlobalIndex = ((OutputUAVTexelCoordinate.x * OutputDimensions.y + OutputUAVTexelCoordinate.y)*3);
+	const uint GlobalIndex = ((OutputUAVTexelCoordinate.x * OutputDimensions.y + OutputUAVTexelCoordinate.y));
 
 	// note that the OutputUAV has shape (1, Y, X, C)
 	// which is why we need to flip the indexing
@@ -24,8 +24,6 @@ void SceneColorToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThre
 	const float4 TextureValue = InputTexture.SampleLevel(InputTextureSampler, UV, 0);
 
 	OutputUAV[GlobalIndex + 0] = TextureValue.r;
-	OutputUAV[GlobalIndex + 1] = TextureValue.g;
-	OutputUAV[GlobalIndex + 2] = TextureValue.b;
 }
 
 #include "/Engine/Public/Platform.ush"

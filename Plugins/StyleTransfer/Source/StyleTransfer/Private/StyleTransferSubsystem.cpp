@@ -42,6 +42,7 @@ void UStyleTransferSubsystem::Deinitialize()
 
 bool UStyleTransferSubsystem::Tick(float DeltaTime)
 {
+	return false;
 	if (!GetWorld())
 		return true;
 
@@ -74,12 +75,14 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 
 		if (!StyleTransferInferenceContext || *StyleTransferInferenceContext == INDEX_NONE)
 		{
+			UE_LOG(LogStyleTransfer, Log, TEXT("Creating Inference Context for StyleTransfer"));
 			StyleTransferInferenceContext = MakeShared<int32>(StyleTransferNetwork->CreateInferenceContext());
 			checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
 		}
 
-		for (int32 i = 0; i < FMath::Min(2, StyleTransferSettings->StyleTextures.Num()); ++i)
+		for (uint32 i = 0; i < FMath::Min(2u, uint32(StyleTransferSettings->StyleTextures.Num())); ++i)
 		{
+			UE_LOG(LogStyleTransfer, Log, TEXT("Creating Inference Context for Style %i"), i);
 			const int32& StylePredictionInferenceContext = StylePredictionInferenceContexts.Emplace_GetRef(StylePredictionNetwork->CreateInferenceContext());
 			checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StylePredictionNetwork"));
 
@@ -88,12 +91,16 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 #if WITH_EDITOR
 			FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
 #endif
-			UpdateStyle(StyleTexture, StylePredictionInferenceContext);
+			UpdateStyle(StyleTexture, i, StylePredictionInferenceContext);
 		}
 		//UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
+		UE_LOG(LogStyleTransfer, Log, TEXT("Creating FStyleTransferSceneViewExtension"));
 		StyleTransferSceneViewExtension = FSceneViewExtensions::NewExtension<FStyleTransferSceneViewExtension>(ViewportClient->GetWorld(), ViewportClient, StyleTransferNetwork, StyleTransferInferenceContext.ToSharedRef());
 	}
-	StyleTransferSceneViewExtension->SetEnabled(true);
+	if (StyleTransferSceneViewExtension)
+	{
+		StyleTransferSceneViewExtension->SetEnabled(true);
+	}
 }
 
 void UStyleTransferSubsystem::StopStylizingViewport()
@@ -116,12 +123,17 @@ void UStyleTransferSubsystem::StopStylizingViewport()
 	}
 }
 
-void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, int32 StylePredictionInferenceContext)
+BEGIN_SHADER_PARAMETER_STRUCT(FCopyBufferParameters,)
+	RDG_BUFFER_ACCESS(SrcBuffer, ERHIAccess::CopySrc)
+	RDG_BUFFER_ACCESS(DstBuffer, ERHIAccess::CopyDest)
+END_SHADER_PARAMETER_STRUCT()
+
+void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, uint32 StyleIndex, int32 StylePredictionInferenceContext)
 {
 	checkf(StyleTransferInferenceContext.IsValid() && (*StyleTransferInferenceContext) != INDEX_NONE, TEXT("Can not infer style without inference context"));
 	checkf(StylePredictionInferenceContext != INDEX_NONE, TEXT("Can not update style without inference context"));
 	FlushRenderingCommands();
-	ENQUEUE_RENDER_COMMAND(StylePrediction)([this, StyleTexture, StylePredictionInferenceContext](FRHICommandListImmediate& RHICommandList)
+	ENQUEUE_RENDER_COMMAND(StylePrediction)([this, StyleTexture, StylePredictionInferenceContext, StyleIndex](FRHICommandListImmediate& RHICommandList)
 	{
 		IRenderCaptureProvider* RenderCaptureProvider = ConditionalBeginRenderCapture(RHICommandList);
 
@@ -142,11 +154,21 @@ void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, int32 StyleP
 			FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
 			FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
 			const uint64 NumBytes = OutputStyleParams.NumInBytes();
-			check(OutputStyleParamsBuffer->GetSize() == InputStyleParamsBuffer->GetSize());
-			check(OutputStyleParamsBuffer->GetSize() == OutputStyleParams.NumInBytes());
-			check(InputStyleParamsBuffer->GetSize() == InputStyleParams.NumInBytes());
+			const uint64 DstOffset = StyleIndex * NumBytes;
 
-			AddCopyBufferPass(GraphBuilder, InputStyleParamsBuffer, OutputStyleParamsBuffer);
+
+			FCopyBufferParameters* Parameters = GraphBuilder.AllocParameters<FCopyBufferParameters>();
+			Parameters->SrcBuffer = OutputStyleParamsBuffer;
+			Parameters->DstBuffer = InputStyleParamsBuffer;
+
+			GraphBuilder.AddPass(
+				RDG_EVENT_NAME("CopyBuffer(%s Size=%ubytes)", Parameters->SrcBuffer, Parameters->SrcBuffer->Desc.GetSize()),
+				Parameters,
+				ERDGPassFlags::Copy,
+				[Parameters, NumBytes, DstOffset](FRHICommandList& RHICmdList)
+				{
+					RHICmdList.CopyBufferRegion(Parameters->DstBuffer->GetRHI(), DstOffset, Parameters->SrcBuffer->GetRHI(), 0, NumBytes);
+				});
 		}
 		GraphBuilder.Execute();
 
@@ -163,7 +185,7 @@ void UStyleTransferSubsystem::UpdateStyle(FString StyleTensorDataPath)
 {
 	FArchive& FileReader = *IFileManager::Get().CreateFileReader(*StyleTensorDataPath);
 	TArray<float> StyleParams;
-	StyleParams.SetNumUninitialized(192);
+	StyleParams.SetNumUninitialized(2758);
 
 	FileReader << StyleParams;
 
@@ -252,21 +274,29 @@ void UStyleTransferSubsystem::InterpolateStyles(int32 StylePredictionInferenceCo
 			FStyleTransferSceneViewExtension::InterpolateTensors(GraphBuilder, OutputStyleParamsTensor, InputStyleImageTensorA, InputStyleImageTensorB, Alpha);
 		}
 		GraphBuilder.Execute();
-		if(RenderCaptureProvider) RenderCaptureProvider->EndCapture(&RHICommandList);
+		if (RenderCaptureProvider) RenderCaptureProvider->EndCapture(&RHICommandList);
 	});
 }
 
-IRenderCaptureProvider* UStyleTransferSubsystem::ConditionalBeginRenderCapture(FRHICommandListImmediate& RHICommandList)
+IRenderCaptureProvider* BeginRenderCapture(FRHICommandListImmediate& RHICommandList)
+{
+	IRenderCaptureProvider* RenderCaptureProvider = nullptr;
+	const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
+	if (IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
+	{
+		RenderCaptureProvider = &IModularFeatures::Get().GetModularFeature<IRenderCaptureProvider>(RenderCaptureProviderType);
+		RenderCaptureProvider->EndCapture(&RHICommandList);
+		RenderCaptureProvider->BeginCapture(&RHICommandList);
+	}
+	return RenderCaptureProvider;
+}
+
+IRenderCaptureProvider* ConditionalBeginRenderCapture(FRHICommandListImmediate& RHICommandList)
 {
 	IRenderCaptureProvider* RenderCaptureProvider = nullptr;
 	if (CVarAutoCaptureStylePrediction.GetValueOnRenderThread())
 	{
-		const FName RenderCaptureProviderType = IRenderCaptureProvider::GetModularFeatureName();
-		if (IModularFeatures::Get().IsModularFeatureAvailable(RenderCaptureProviderType))
-		{
-			RenderCaptureProvider = &IModularFeatures::Get().GetModularFeature<IRenderCaptureProvider>(RenderCaptureProviderType);
-			RenderCaptureProvider->BeginCapture(&RHICommandList);
-		}
+		RenderCaptureProvider = BeginRenderCapture(RHICommandList);
 	}
 	return RenderCaptureProvider;
 }

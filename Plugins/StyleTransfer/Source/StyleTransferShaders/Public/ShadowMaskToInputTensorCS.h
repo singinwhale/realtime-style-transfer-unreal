@@ -10,11 +10,10 @@
 #include "ShaderParameterUtils.h"
 
 
-
-class STYLETRANSFERSHADERS_API FSceneColorToInputTensorCS : public FGlobalShader
+class STYLETRANSFERSHADERS_API FShadowMaskToInputTensorCS : public FGlobalShader
 {
-	DECLARE_GLOBAL_SHADER(FSceneColorToInputTensorCS);
-	SHADER_USE_PARAMETER_STRUCT(FSceneColorToInputTensorCS, FGlobalShader)
+	DECLARE_GLOBAL_SHADER(FShadowMaskToInputTensorCS);
+	SHADER_USE_PARAMETER_STRUCT(FShadowMaskToInputTensorCS, FGlobalShader)
 
 
 	static const FIntVector ThreadGroupSize;
