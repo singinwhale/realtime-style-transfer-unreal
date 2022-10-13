@@ -15,7 +15,7 @@ void ShadowMaskToInputTensorCS(in const uint3 DispatchThreadID : SV_DispatchThre
 		return;
 	}
 
-	const uint GlobalIndex = ((OutputUAVTexelCoordinate.x * OutputDimensions.y + OutputUAVTexelCoordinate.y));
+	const uint GlobalIndex = OutputUAVTexelCoordinate.x * OutputDimensions.y + OutputUAVTexelCoordinate.y;
 
 	// note that the OutputUAV has shape (1, Y, X, C)
 	// which is why we need to flip the indexing

@@ -1,11 +1,11 @@
 // Copyright 2022 Manuel Wagner - All rights reserved
 
-// this assumes that the OutputTexture has
-// the exact same dimensions as InputTensor!
-uint TensorVolume;
-uint2 TextureSize;
 RWTexture2D<float4> OutputTexture;
 Buffer<float> InputTensor;
+uint TensorVolume;
+// this assumes that the OutputTexture has
+// the exact same dimensions as InputTensor!
+uint2 TextureSize;
 
 // DispatchThreadID corresponds to InputTensor shape dimensions not texture XY -> DispatchThreadID.X = Texture.Y
 [numthreads(THREADGROUP_SIZE_X, THREADGROUP_SIZE_Y, THREADGROUP_SIZE_Z)]

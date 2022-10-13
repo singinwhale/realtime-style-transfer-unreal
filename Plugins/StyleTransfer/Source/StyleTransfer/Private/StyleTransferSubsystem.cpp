@@ -144,7 +144,7 @@ void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, uint32 Style
 			const FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContext(StylePredictionInferenceContext, 0);
 			FTextureResource* StyleTextureResource = StyleTexture->GetResource();
 			FRDGTextureRef RDGStyleTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(StyleTextureResource->TextureRHI, TEXT("StyleInputTexture")));
-			FStyleTransferSceneViewExtension::TextureToTensor(GraphBuilder, RDGStyleTexture, InputStyleImageTensor);
+			FStyleTransferSceneViewExtension::TextureToTensorRGB(GraphBuilder, RDGStyleTexture, InputStyleImageTensor);
 
 			StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
 
