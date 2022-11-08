@@ -67,7 +67,6 @@ FStyleTransferSceneViewExtension::FStyleTransferSceneViewExtension(const FAutoRe
 		else if (TensorName == "style_params") StyleParamsInputTensorIndex = i;
 	}
 	check(ContentInputTensorIndex != INDEX_NONE);
-	check(StyleWeightsInputTensorIndex != INDEX_NONE);
 	check(StyleParamsInputTensorIndex != INDEX_NONE);
 }
 
@@ -381,11 +380,15 @@ FScreenPassTexture FStyleTransferSceneViewExtension::PostProcessPassAfterTonemap
 	const FViewInfo& ViewInfo = static_cast<const FViewInfo&>(View);
 
 	const FNeuralTensor& StyleTransferContentInputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, ContentInputTensorIndex);
-	const FNeuralTensor& StyleTransferStyleWeightsInputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, StyleWeightsInputTensorIndex);
 
-	check(GScreenShadowMaskTexture);
-	::TextureToTensorGrayscale(GraphBuilder, GScreenShadowMaskTexture, StyleTransferStyleWeightsInputTensor);
+	if (StyleWeightsInputTensorIndex != INDEX_NONE)
+	{
+		const FNeuralTensor& StyleTransferStyleWeightsInputTensor = StyleTransferNetwork->GetInputTensorForContext(*InferenceContext, StyleWeightsInputTensorIndex);
 
+		check(GScreenShadowMaskTexture);
+		::TextureToTensorGrayscale(GraphBuilder, GScreenShadowMaskTexture, StyleTransferStyleWeightsInputTensor);
+	}
+	
 	::TextureToTensorRGB(GraphBuilder, SceneColor.Texture, StyleTransferContentInputTensor);
 
 	StyleTransferNetwork->Run(GraphBuilder, *InferenceContext);
