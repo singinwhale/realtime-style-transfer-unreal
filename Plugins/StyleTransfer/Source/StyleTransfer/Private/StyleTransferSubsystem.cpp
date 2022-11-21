@@ -92,6 +92,7 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 			FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
 #endif
 			UpdateStyle(StyleTexture, i, StylePredictionInferenceContext);
+			//UpdateStyle(StyleTexture, i, StylePredictionInferenceContext);
 		}
 		//UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
 		UE_LOG(LogStyleTransfer, Log, TEXT("Creating FStyleTransferSceneViewExtension"));
@@ -136,23 +137,26 @@ void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, uint32 Style
 	ENQUEUE_RENDER_COMMAND(StylePrediction)([this, StyleTexture, StylePredictionInferenceContext, StyleIndex](FRHICommandListImmediate& RHICommandList)
 	{
 		IRenderCaptureProvider* RenderCaptureProvider = ConditionalBeginRenderCapture(RHICommandList);
-
 		FRDGBuilder GraphBuilder(RHICommandList);
 		{
 			RDG_EVENT_SCOPE(GraphBuilder, "StylePrediction");
 
-			const FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContext(StylePredictionInferenceContext, 0);
+			FNeuralTensor& InputStyleImageTensor = StylePredictionNetwork->GetInputTensorForContextMutable(StylePredictionInferenceContext, 0);
+			FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContextMutable(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+			InputStyleImageTensor.GPUToRDGBuilder_RenderThread(&GraphBuilder);
+			InputStyleParams.GPUToRDGBuilder_RenderThread(&GraphBuilder);
 			FTextureResource* StyleTextureResource = StyleTexture->GetResource();
 			FRDGTextureRef RDGStyleTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(StyleTextureResource->TextureRHI, TEXT("StyleInputTexture")));
 			FStyleTransferSceneViewExtension::TextureToTensorRGB(GraphBuilder, RDGStyleTexture, InputStyleImageTensor);
 
+
+
 			StylePredictionNetwork->Run(GraphBuilder, StylePredictionInferenceContext);
 
-			const FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContext, 0);
-			const FNeuralTensor& InputStyleParams = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
 
-			FRDGBufferRef OutputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(OutputStyleParams.GetPooledBuffer());
-			FRDGBufferRef InputStyleParamsBuffer = GraphBuilder.RegisterExternalBuffer(InputStyleParams.GetPooledBuffer());
+			FNeuralTensor& OutputStyleParams = StylePredictionNetwork->GetOutputTensorForContextMutable(StylePredictionInferenceContext, 0);
+			FRDGBufferRef OutputStyleParamsBuffer = OutputStyleParams.GetBufferSRVRef()->GetParent();
+			FRDGBufferRef InputStyleParamsBuffer = InputStyleParams.GetBufferUAVRef()->GetParent();
 			const uint64 NumBytes = OutputStyleParams.NumInBytes();
 			const uint64 DstOffset = StyleIndex * NumBytes;
 
@@ -162,12 +166,12 @@ void UStyleTransferSubsystem::UpdateStyle(UTexture2D* StyleTexture, uint32 Style
 			Parameters->DstBuffer = InputStyleParamsBuffer;
 
 			GraphBuilder.AddPass(
-				RDG_EVENT_NAME("CopyBuffer(%s Size=%ubytes)", Parameters->SrcBuffer, Parameters->SrcBuffer->Desc.GetSize()),
+				RDG_EVENT_NAME("CopyBuffer(%s Size=%ubytes)", Parameters->SrcBuffer->Name, Parameters->SrcBuffer->Desc.GetSize()),
 				Parameters,
 				ERDGPassFlags::Copy,
 				[Parameters, NumBytes, DstOffset](FRHICommandList& RHICmdList)
 				{
-					RHICmdList.CopyBufferRegion(Parameters->DstBuffer->GetRHI(), DstOffset, Parameters->SrcBuffer->GetRHI(), 0, NumBytes);
+					RHICmdList.CopyBufferRegion(Parameters->DstBuffer->GetRHI(), /*DstOffset*/ 0, Parameters->SrcBuffer->GetRHI(), 0, NumBytes);
 				});
 		}
 		GraphBuilder.Execute();
@@ -185,7 +189,7 @@ void UStyleTransferSubsystem::UpdateStyle(FString StyleTensorDataPath)
 {
 	FArchive& FileReader = *IFileManager::Get().CreateFileReader(*StyleTensorDataPath);
 	TArray<float> StyleParams;
-	StyleParams.SetNumUninitialized(2758);
+	StyleParams.SetNumUninitialized(2758); // hardcoded for brevity reasons
 
 	FileReader << StyleParams;
 
@@ -268,9 +272,12 @@ void UStyleTransferSubsystem::InterpolateStyles(int32 StylePredictionInferenceCo
 		{
 			RDG_EVENT_SCOPE(GraphBuilder, "StylePrediction");
 
-			const FNeuralTensor& InputStyleImageTensorA = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContextA, 0);
-			const FNeuralTensor& InputStyleImageTensorB = StylePredictionNetwork->GetOutputTensorForContext(StylePredictionInferenceContextB, 0);
-			const FNeuralTensor& OutputStyleParamsTensor = StyleTransferNetwork->GetInputTensorForContext(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+			FNeuralTensor& InputStyleImageTensorA = StylePredictionNetwork->GetOutputTensorForContextMutable(StylePredictionInferenceContextA, 0);
+			FNeuralTensor& InputStyleImageTensorB = StylePredictionNetwork->GetOutputTensorForContextMutable(StylePredictionInferenceContextB, 0);
+			FNeuralTensor& OutputStyleParamsTensor = StyleTransferNetwork->GetInputTensorForContextMutable(*StyleTransferInferenceContext, StyleTransferStyleParamsInputIndex);
+			InputStyleImageTensorA.GPUToRDGBuilder_RenderThread(&GraphBuilder);
+			InputStyleImageTensorB.GPUToRDGBuilder_RenderThread(&GraphBuilder);
+			OutputStyleParamsTensor.GPUToRDGBuilder_RenderThread(&GraphBuilder);
 			FStyleTransferSceneViewExtension::InterpolateTensors(GraphBuilder, OutputStyleParamsTensor, InputStyleImageTensorA, InputStyleImageTensorB, Alpha);
 		}
 		GraphBuilder.Execute();
