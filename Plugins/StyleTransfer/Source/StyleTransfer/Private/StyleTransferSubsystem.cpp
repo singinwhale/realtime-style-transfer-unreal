@@ -80,7 +80,7 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 			checkf(*StyleTransferInferenceContext != INDEX_NONE, TEXT("Could not create inference context for StyleTransferNetwork"));
 		}
 
-		for (uint32 i = 0; i < FMath::Min(2u, uint32(StyleTransferSettings->StyleTextures.Num())); ++i)
+		for (uint32 i = 0; i < uint32(StyleTransferSettings->StyleTextures.Num()); ++i)
 		{
 			UE_LOG(LogStyleTransfer, Log, TEXT("Creating Inference Context for Style %i"), i);
 			const int32& StylePredictionInferenceContext = StylePredictionInferenceContexts.Emplace_GetRef(StylePredictionNetwork->CreateInferenceContext());
@@ -92,7 +92,6 @@ void UStyleTransferSubsystem::StartStylizingViewport(FViewportClient* ViewportCl
 			FTextureCompilingManager::Get().FinishCompilation({StyleTexture});
 #endif
 			UpdateStyle(StyleTexture, i, StylePredictionInferenceContext);
-			//UpdateStyle(StyleTexture, i, StylePredictionInferenceContext);
 		}
 		//UpdateStyle(FPaths::GetPath("C:\\projects\\realtime-style-transfer\\temp\\style_params_tensor.bin"));
 		UE_LOG(LogStyleTransfer, Log, TEXT("Creating FStyleTransferSceneViewExtension"));
